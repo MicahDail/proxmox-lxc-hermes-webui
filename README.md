@@ -6,10 +6,25 @@ Existing containers are never modified. The script refuses to reuse a VMID that 
 
 ## What you get
 
-- Debian LXC (privileged, DHCP on `vmbr0`)
-- User `hermes` with Hermes Agent + messaging **gateway** (systemd user service + linger)
+- Debian LXC (privileged, nesting, DHCP on `vmbr0`)
+- User `hermes` in group `docker`; Docker daemon + sandbox image pulled
+- Hermes Agent + messaging **gateway** (systemd user service + linger)
 - Custom model: `model.provider=custom`, your base URL and model id
 - Hermes WebUI on port **8787** (`0.0.0.0`), password-protected, systemd `hermes-webui.service`
+
+### Profiles
+
+| Profile | Terminal | Gateway | Role |
+|---|---|---|---|
+| `default` | Docker | running | General chat. Defers hiring to smith. |
+| `agent-template` | Docker | **parked** | Clone source for new workers. Do not run work as this profile. |
+| `smith` | **host** (`local`) | running | Only minter. Clones `agent-template`, writes souls. |
+
+Workers minted by smith inherit Docker. Smith is the only profile with host execution (`hermes` is also in `docker`; that is policy, not a jail).
+
+Default soul + skill `defer-onboard`: if asked to mint an agent, tell the user to switch to **smith**. Do not run `hermes profile create`.
+
+Smith skill `onboard-agent`: person names (not job slugs), `--description` is the job, always `--clone-from agent-template`, mint a new `API_SERVER_KEY` (clone strips it), never print keys or `/p/` URLs.
 
 ## Run (on the Proxmox host)
 
@@ -46,9 +61,9 @@ export CT_HOSTNAME=hermes-webui
 ./install.sh
 ```
 
-Other knobs: `MEMORY_MB`, `CORES`, `DISK_GB`, `BRIDGE`, `TEMPLATE`, `WEBUI_PORT`, `WEBUI_HOST`, `WEBUI_PASSWORD`, `ROOT_PASSWORD`.
+Other knobs: `MEMORY_MB`, `CORES`, `DISK_GB`, `BRIDGE`, `TEMPLATE`, `WEBUI_PORT`, `WEBUI_HOST`, `WEBUI_PASSWORD`, `ROOT_PASSWORD`, `DOCKER_IMAGE` (default `nousresearch/hermes-sandbox:desktop`).
 
-Without a TTY the script still requires `MODEL_URL` / `MODEL_ID` (or a reachable `/v1/models` list) and will proceed without the “Continue?” prompt only if you are non-interactive **and** those are set — actually looking at the script, non-interactive still asks Continue only if tty. Non-tty skips the confirm... wait, the confirm is `if [ -t 0 ]`. Non-interactive skips confirm. Good.
+Non-tty skips the “Continue?” prompt.
 
 Passwords are written to `/root/<hostname>-<vmid>.creds` on the Proxmox host (mode 600). They are not printed.
 
@@ -56,13 +71,27 @@ Passwords are written to `/root/<hostname>-<vmid>.creds` on the Proxmox host (mo
 
 Open `http://<ct-ip>:8787` and sign in with `webui_password` from the creds file.
 
+Talk to **default** for general work. Switch to **smith** to mint a new agent. Open the new profile in the WebUI switcher (or `hermes -p <name> chat`).
+
 ```bash
 pct enter <vmid>
 su - hermes
+hermes profile list
 ```
+
+If a Docker worker says the kernel/daemon is down but `docker` is running: the gateway was likely started before `hermes` was in group `docker`. Restart the user session, then the gateway:
+
+```bash
+systemctl restart user@1000.service
+loginctl enable-linger hermes
+su - hermes -c 'hermes gateway start'
+```
+
+Confirm the gateway PID has group `docker` (`grep ^Groups /proc/<pid>/status`).
 
 ## Notes
 
 - Unprivileged create failed on at least one PVE host (`lxc-usernsexec` extract). This script uses a **privileged** CT.
 - Optional Hermes tool `cua-driver` may fail without X11 libs; it is not required for WebUI/chat.
-- Hermes Agent install can take several minutes (git clone + uv + tools).
+- Hermes Agent install can take several minutes (git clone + uv + tools). Docker image pull adds more.
+- Seed files under `files/` match what `install.sh` writes; the script embeds copies so `ssh bash -s` still works.

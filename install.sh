@@ -12,6 +12,7 @@ BRIDGE="${BRIDGE:-vmbr0}"
 TEMPLATE="${TEMPLATE:-}"
 WEBUI_PORT="${WEBUI_PORT:-8787}"
 WEBUI_HOST="${WEBUI_HOST:-0.0.0.0}"
+DOCKER_IMAGE="${DOCKER_IMAGE:-nousresearch/hermes-sandbox:desktop}"
 
 prompt() {
   local var=$1 msg=$2 def=${3-}
@@ -118,6 +119,7 @@ if ! command -v pct >/dev/null 2>&1; then
       BRIDGE="$BRIDGE" TEMPLATE="${TEMPLATE:-}" WEBUI_PORT="$WEBUI_PORT" WEBUI_HOST="$WEBUI_HOST" \
       VMID="${VMID:-}" MODEL_URL="$MODEL_URL" MODEL_ID="$MODEL_ID" \
       MODEL_API_KEY="${MODEL_API_KEY-}" WEBUI_PASSWORD="${WEBUI_PASSWORD:-}" \
+      DOCKER_IMAGE="$DOCKER_IMAGE" \
       bash -s < "$0"
 fi
 
@@ -146,6 +148,7 @@ CREDS="/root/${CT_HOSTNAME}-${VMID}.creds"
 echo
 echo "Will create NEW CT $VMID ($CT_HOSTNAME) from $TEMPLATE"
 echo "  model: $MODEL_ID @ $MODEL_URL"
+echo "  docker: $DOCKER_IMAGE (workers); smith uses host terminal"
 echo "  resources: ${MEMORY_MB}MB RAM, ${CORES} cores, ${DISK_GB}G disk"
 echo "Existing containers will not be changed."
 if [ -t 0 ]; then
@@ -163,6 +166,7 @@ vmid=$VMID
 hostname=$CT_HOSTNAME
 model_url=$MODEL_URL
 model_id=$MODEL_ID
+docker_image=$DOCKER_IMAGE
 root_password=$ROOT_PASSWORD
 webui_password=$WEBUI_PASSWORD
 EOF
@@ -195,13 +199,16 @@ done
 printf 'ip=%s\nwebui=http://%s:%s\n' "$ip" "$ip" "$WEBUI_PORT" >> "$CREDS"
 echo "CT $VMID is up${ip:+ at $ip}"
 
-echo "Installing packages ..."
-pct exec "$VMID" -- bash -lc '
+echo "Installing packages + Docker ..."
+pct exec "$VMID" -- env DOCKER_IMAGE="$DOCKER_IMAGE" bash -lc '
 set -e
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip python3-dev build-essential sudo openssl
+apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip python3-dev build-essential sudo openssl docker.io
 id hermes >/dev/null 2>&1 || useradd -m -s /bin/bash hermes
+usermod -aG docker hermes
+systemctl enable --now docker
+docker pull "$DOCKER_IMAGE"
 '
 
 echo "Installing Hermes Agent (this can take several minutes) ..."
@@ -221,6 +228,7 @@ export PATH=\"\$HOME/.local/bin:\$PATH\"
 hermes config set model.provider custom
 hermes config set model.base_url '$MODEL_URL'
 hermes config set model.default '$MODEL_ID'
+hermes config set terminal.backend docker
 "
 
 if [ -n "${MODEL_API_KEY:-}" ]; then
@@ -259,6 +267,235 @@ p.write_text('\\n'.join(lines) + '\\n')
 p.chmod(0o600)
 print('hermes env ready')
 PY
+"
+
+echo "Seeding default soul, agent-template, and smith ..."
+seed_dir=$(mktemp -d)
+trap 'rm -rf "$seed_dir"' EXIT
+
+cat > "$seed_dir/default.SOUL.md" <<'EOF'
+You are Hermes Agent, built by Nous Research. Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default.
+
+## Agent onboarding
+You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
+EOF
+
+cat > "$seed_dir/defer-onboard.SKILL.md" <<'EOF'
+---
+name: defer-onboard
+description: >
+  Use when the user wants a new Hermes agent, profile, soul, or to
+  onboard someone. You do not mint agents. Send them to smith.
+---
+
+# Defer onboarding
+
+You are not smith. Do not run `hermes profile create`.
+
+Tell the user: switch the WebUI profile to **smith** (or `hermes -p smith chat`) and ask smith. Then stop.
+EOF
+
+cat > "$seed_dir/agent-template.SOUL.md" <<'EOF'
+# Soul
+
+Filled in at mint time by smith. Do not run work as this template.
+EOF
+
+cat > "$seed_dir/smith.SOUL.md" <<'EOF'
+# Soul
+
+You are Smith. Informal craftsperson. You mint Hermes profiles.
+
+You study the roster, decide if a new soul is warranted, research how that kind of person should speak, then clone `agent-template` and write a short SOUL.md.
+
+Names are people, not job titles. Pick a short fictional-character-flavored name that fits the soul (`scotty`, `lyra`). The Hermes `--description` stays the actual job so kanban can route.
+
+You do not do the other agents' jobs.
+
+After a mint, tell the human the name, charter, and how to open them in WebUI (or `hermes -p <name> chat`). Do not mention gateway URLs, ports, or API keys.
+
+## Style
+- Direct. Short souls beat long ones.
+- Push back if two agents would be the same person.
+
+## Avoid
+- Copy-pasting other people's souls
+- Paths and CLI in SOUL.md
+- Reading other profiles' .env
+- `--clone-channels`
+- Printing `/p/` endpoints or keys
+EOF
+
+cat > "$seed_dir/onboard-agent.SKILL.md" <<'EOF'
+---
+name: onboard-agent
+description: >
+  List Hermes profiles, read souls/skills, research what a role should
+  sound like, and mint a new profile only when warranted.
+---
+
+# Onboard an agent
+
+Host CLI as user `hermes`. Workers use Docker; only this profile is on the host.
+
+## Landscape (always first)
+
+```sh
+hermes profile list
+# then read ~/.hermes/profiles/<slug>/SOUL.md and skills/
+```
+
+Do not read other profiles' `.env`.
+
+## Warrant
+
+Mint only if no existing soul covers the role. If one fits, name it and stop.
+
+## Naming
+
+Do **not** slug from the job title (`backend-engineer`). Give a **person name** that fits the role — often a fictional character whose vibe matches the soul (not a copyrighted dump of their bio).
+
+Examples:
+
+| Role | Name / slug | Why |
+|---|---|---|
+| careful reviewer | `elliott` | quiet, precise |
+| ops / keep-the-lights-on | `scotty` | engines, not strategy |
+| explorer / researcher | `lyra` | curious, maps unknown stuff |
+
+Rules:
+
+- One short slug: lowercase, hyphens, unique. Never `default`, `smith`, `agent-template`.
+- `--description` is the **job** (what kanban routes on), not the cute name. e.g. `scotty` + description `Linux/ops firefighter. Keeps hosts up.`
+- SOUL.md speaks as that person in that job. Do not paste a wiki plot summary.
+- If the user already gave a name, use it unless it collides.
+
+## Research (before writing a soul)
+
+Use **web search**, not a full browser. Short queries, then stop.
+
+Primary (read these, they are the spec):
+
+- https://hermes-agent.nousresearch.com/docs/guides/use-soul-with-hermes
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/personality
+- https://hermes-agent.nousresearch.com/docs/user-guide/features/skills
+
+Optional: `hermes skills search <role>` for capability packs, not personality.
+
+Do **not** paste another project's SOUL.md verbatim. Synthesize.
+
+## What a good SOUL.md is
+
+Identity only (slot #1 of the system prompt). Stable voice, not a runbook.
+
+Put in SOUL:
+
+- who they are
+- tone / directness
+- what they avoid
+- how they handle uncertainty
+
+Keep out of SOUL (put in skills or leave out):
+
+- paths, ports, CLI recipes, repo layout, one-off tasks
+
+Strong: 4–8 specific lines, no "be helpful." Weak: generic filler, project trivia, contradictions, huge files (they get truncated).
+
+Suggested shape:
+
+```md
+# Identity
+# Style
+# Avoid
+# Defaults
+```
+
+## Mint
+
+Always clone **agent-template**. Then write the soul. Extra skills optional.
+
+Clone **strips** `API_SERVER_KEY`. Mint a new one into that profile `.env` so the multiplexer can serve it. **Never print the key. Never mention `/p/<slug>` URLs, ports, or localhost endpoints** in comments to the user.
+
+```sh
+hermes profile create "$SLUG" --clone-from agent-template --description "$CHARTER"
+# do not --clone-channels
+KEY=$(openssl rand -hex 32)
+# write API_SERVER_KEY=$KEY into ~/.hermes/profiles/$SLUG/.env; do not echo it
+# write SOUL.md from research + charter
+hermes -p "$SLUG" skills install <identifier> -y   # optional
+```
+
+Tell the user: name, one-line charter, soul gist, and how to talk to them — **WebUI profile switcher** or `hermes -p $SLUG chat`. That is all.
+
+Never mint from `smith`. Never give workers `terminal.backend local`. No docker.sock.
+EOF
+
+pct exec "$VMID" -- mkdir -p /home/hermes/.hermes/skills/defer-onboard
+pct push "$VMID" "$seed_dir/default.SOUL.md" /home/hermes/.hermes/SOUL.md
+pct push "$VMID" "$seed_dir/defer-onboard.SKILL.md" /home/hermes/.hermes/skills/defer-onboard/SKILL.md
+pct push "$VMID" "$seed_dir/agent-template.SOUL.md" /tmp/agent-template.SOUL.md
+pct push "$VMID" "$seed_dir/smith.SOUL.md" /tmp/smith.SOUL.md
+pct push "$VMID" "$seed_dir/onboard-agent.SKILL.md" /tmp/onboard-agent.SKILL.md
+pct exec "$VMID" -- chown -R hermes:hermes /home/hermes/.hermes /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md
+
+pct exec "$VMID" -- su - hermes -c "
+set -e
+export PATH=\"\$HOME/.local/bin:\$PATH\"
+hermes profile create agent-template --description 'Parked clone source. Do not run work as this profile.'
+hermes -p agent-template config set terminal.backend docker
+hermes -p agent-template config set model.provider custom
+hermes -p agent-template config set model.base_url '$MODEL_URL'
+hermes -p agent-template config set model.default '$MODEL_ID'
+install -m 644 /tmp/agent-template.SOUL.md \$HOME/.hermes/profiles/agent-template/SOUL.md
+python3 - <<'PY'
+from pathlib import Path
+p = Path.home() / '.hermes' / 'profiles' / 'agent-template' / 'config.yaml'
+t = p.read_text() if p.exists() else ''
+if 'gateway:' not in t:
+    t = t.rstrip() + '\n\ngateway:\n  parked: true\n'
+elif 'parked:' not in t:
+    t = t.rstrip() + '\n  parked: true\n'
+else:
+    import re
+    t = re.sub(r'parked:\\s*\\S+', 'parked: true', t)
+p.write_text(t if t.endswith('\n') else t + '\n')
+PY
+hermes profile create smith --no-skills --description 'Mints new Hermes profiles from agent-template. Host terminal.'
+hermes -p smith config set terminal.backend local
+hermes -p smith config set model.provider custom
+hermes -p smith config set model.base_url '$MODEL_URL'
+hermes -p smith config set model.default '$MODEL_ID'
+hermes -p smith config set tools.exec.timeout 120
+for t in browser vision web_search image_gen speech tts web_extract code_execution container mcp; do
+  hermes -p smith config set tools.\$t.enabled false 2>/dev/null || true
+done
+hermes -p smith config set tools.web.enabled true 2>/dev/null || true
+install -m 644 /tmp/smith.SOUL.md \$HOME/.hermes/profiles/smith/SOUL.md
+mkdir -p \$HOME/.hermes/profiles/smith/skills/onboard-agent
+install -m 644 /tmp/onboard-agent.SKILL.md \$HOME/.hermes/profiles/smith/skills/onboard-agent/SKILL.md
+python3 - <<'PY'
+from pathlib import Path
+import secrets, re
+root = Path.home() / '.hermes'
+base = (root / '.env').read_text() if (root / '.env').exists() else ''
+openai_url = next((ln.split('=',1)[1] for ln in base.splitlines() if ln.startswith('OPENAI_BASE_URL=')), '')
+openai_key = next((ln.split('=',1)[1] for ln in base.splitlines() if ln.startswith('OPENAI_API_KEY=')), '')
+for slug in ('agent-template', 'smith'):
+    envp = root / 'profiles' / slug / '.env'
+    lines = [ln for ln in (envp.read_text().splitlines() if envp.exists() else []) if ln.strip() and not ln.startswith(('API_SERVER_KEY=', 'OPENAI_BASE_URL=', 'OPENAI_API_KEY=', 'API_SERVER_ENABLED=', 'API_SERVER_HOST='))]
+    lines += [
+        'API_SERVER_ENABLED=true',
+        'API_SERVER_HOST=127.0.0.1',
+        'API_SERVER_KEY=' + secrets.token_hex(32),
+    ]
+    if openai_url:
+        lines.append('OPENAI_BASE_URL=' + openai_url)
+    if openai_key:
+        lines.append('OPENAI_API_KEY=' + openai_key)
+    envp.write_text('\\n'.join(lines) + '\\n')
+    envp.chmod(0o600)
+PY
+rm -f /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md
 "
 
 echo "Starting Hermes gateway ..."
@@ -334,4 +571,5 @@ echo "Done. Existing CTs were not modified."
 echo "  WebUI:  http://${ip}:${WEBUI_PORT}"
 echo "  Creds:  $CREDS (root + webui passwords; not printed here)"
 echo "  Model:  $MODEL_ID @ $MODEL_URL"
+echo "  Profiles: default + agent-template (docker, parked) + smith (host terminal)"
 echo "  Inside: pct enter $VMID"
