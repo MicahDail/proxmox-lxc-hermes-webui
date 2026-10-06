@@ -48,7 +48,7 @@ prompt_secret() {
   printf -v "$var" '%s' "$val"
 }
 
-prompt MODEL_URL "OpenAI-compatible base URL (must end in /v1)" "http://spark01.lan:8000/v1"
+prompt MODEL_URL "OpenAI-compatible base URL (must end in /v1)" "http://127.0.0.1:8000/v1"
 MODEL_URL="${MODEL_URL%/}"
 case "$MODEL_URL" in
   */v1) ;;

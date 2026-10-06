@@ -44,7 +44,7 @@ Then confirm before `pct create`.
 ## Run from another machine
 
 ```bash
-export PROXMOX_HOST=root@proxmox01.lan
+export PROXMOX_HOST=root@pve.example
 ./install.sh
 ```
 
@@ -53,10 +53,10 @@ export PROXMOX_HOST=root@proxmox01.lan
 ## Non-interactive
 
 ```bash
-export MODEL_URL=http://spark01.lan:8000/v1
-export MODEL_ID=qwen3.8-flash-next
+export MODEL_URL=http://127.0.0.1:8000/v1
+export MODEL_ID=your-model-id
 export MODEL_API_KEY=          # optional; set empty if unused
-export VMID=116                # optional; default is cluster nextid
+export VMID=                   # optional; default is cluster nextid
 export CT_HOSTNAME=hermes-webui
 ./install.sh
 ```
