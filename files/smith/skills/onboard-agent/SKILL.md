@@ -22,6 +22,24 @@ Do not read other profiles' `.env`.
 
 Mint only if no existing soul covers the role. If one fits, name it and stop.
 
+## Clarify (before research or mint)
+
+Do not mint from a one-liner. Ask until you can write a soul without guessing. Batch the gaps; do not interview forever.
+
+Need (skip any the user already answered):
+
+- Job: what they actually do, and what they must not do
+- Personality: who they feel like talking to (humor, formality). If they name a vibe or character, use it as tone — do not paste a bio
+- Pushback: call out bad ideas, or stay agreeable
+- Uncertainty: admit it vs speculate
+- Length: one-liners vs depth by default
+- Avoid: hype, sycophancy, overexplaining, swearing, anything else they name
+- Name: theirs, or you pick
+- Model: shop default unless they name another id on the same endpoint
+- Skills now vs later (see below)
+
+If two answers would mint different people, ask. Then proceed.
+
 ## Naming
 
 Do **not** slug from the job title (`backend-engineer`). Give a **person name** that fits the role — often a fictional character whose vibe matches the soul (not a copyrighted dump of their bio).
@@ -55,6 +73,16 @@ Optional: `hermes skills search <role>` for capability packs, not personality.
 
 Do **not** paste another project's SOUL.md verbatim. Synthesize.
 
+## Skills (not a chicken-and-egg)
+
+The profile exists on disk after `hermes profile create`. Seed skills **in that same mint**, before the human talks to them.
+
+- **Hub packs** the user named: `hermes -p "$SLUG" skills install <id> -y` (full packs, not stubs)
+- **Custom procedures** for this job: write `~/.hermes/profiles/$SLUG/skills/<name>/SKILL.md` yourself (how-to, not identity). Treat these as a seed unless the user already specified the whole procedure
+- **Later:** the new agent and the user refine and add skills. Do not block the mint waiting for that.
+
+If they are unsure which packs: search, propose 0–3, install only what they confirm. Procedures belong in skills, not SOUL.
+
 ## What a good SOUL.md is
 
 Identity only (slot #1 of the system prompt). Stable voice, not a runbook.
@@ -83,7 +111,7 @@ Suggested shape:
 
 ## Mint
 
-Always clone **agent-template**. Then write the soul. Extra skills optional.
+Always clone **agent-template**. Then write the soul. Seed hub and/or custom skills in this same turn when the user wants them.
 
 Clone **strips** `API_SERVER_KEY`. Mint a new one into that profile `.env` so the multiplexer can serve it. **Never print the key. Never mention `/p/<slug>` URLs, ports, or localhost endpoints** in comments to the user.
 
@@ -101,6 +129,8 @@ KEY=$(openssl rand -hex 32)
 # write API_SERVER_KEY=$KEY into ~/.hermes/profiles/$SLUG/.env; do not echo it
 # write SOUL.md from research + charter, then append Agent onboarding
 hermes -p "$SLUG" skills install <identifier> -y   # optional
+# if they named another model id on the same endpoint:
+# hermes -p "$SLUG" config set model.default "$MODEL_ID"
 ```
 
 Tell the user: name, one-line charter, soul gist, and how to talk to them — **WebUI profile switcher** or `hermes -p $SLUG chat`. That is all.

@@ -7,9 +7,12 @@ PROXMOX_HOST="${PROXMOX_HOST:-}"
 CT_HOSTNAME="${CT_HOSTNAME:-hermes-webui}"
 MEMORY_MB="${MEMORY_MB:-4096}"
 CORES="${CORES:-4}"
-DISK_GB="${DISK_GB:-16}"
+DISK_GB="${DISK_GB:-32}"
+STORAGE="${STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr0}"
 TEMPLATE="${TEMPLATE:-}"
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+FILES="$SCRIPT_DIR/files"
 WEBUI_PORT="${WEBUI_PORT:-8787}"
 WEBUI_HOST="${WEBUI_HOST:-0.0.0.0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nousresearch/hermes-sandbox:desktop}"
@@ -105,6 +108,11 @@ if [ -z "$MODEL_ID" ]; then
   exit 1
 fi
 
+if [ ! -f "$FILES/smith/skills/onboard-agent/SKILL.md" ]; then
+  echo "Run from a git checkout so files/ sits next to install.sh." >&2
+  exit 1
+fi
+
 if ! command -v pct >/dev/null 2>&1; then
   if [ -z "$PROXMOX_HOST" ] && [ -t 0 ]; then
     echo -n "Proxmox SSH target (user@host): "
@@ -114,13 +122,15 @@ if ! command -v pct >/dev/null 2>&1; then
     echo "Set PROXMOX_HOST or run this script on the Proxmox host." >&2
     exit 1
   fi
-  exec ssh -o BatchMode=yes "$PROXMOX_HOST" \
-    env CT_HOSTNAME="$CT_HOSTNAME" MEMORY_MB="$MEMORY_MB" CORES="$CORES" DISK_GB="$DISK_GB" \
-      BRIDGE="$BRIDGE" TEMPLATE="${TEMPLATE:-}" WEBUI_PORT="$WEBUI_PORT" WEBUI_HOST="$WEBUI_HOST" \
-      VMID="${VMID:-}" MODEL_URL="$MODEL_URL" MODEL_ID="$MODEL_ID" \
-      MODEL_API_KEY="${MODEL_API_KEY-}" WEBUI_PASSWORD="${WEBUI_PASSWORD:-}" \
-      DOCKER_IMAGE="$DOCKER_IMAGE" \
-      bash -s < "$0"
+  tar czf - -C "$SCRIPT_DIR" install.sh files | ssh -o BatchMode=yes "$PROXMOX_HOST" \
+    "d=\$(mktemp -d) && tar xzf - -C \"\$d\" && chmod +x \"\$d/install.sh\" && \
+     env CT_HOSTNAME='$CT_HOSTNAME' MEMORY_MB='$MEMORY_MB' CORES='$CORES' DISK_GB='$DISK_GB' \
+       STORAGE='$STORAGE' BRIDGE='$BRIDGE' TEMPLATE='${TEMPLATE:-}' \
+       WEBUI_PORT='$WEBUI_PORT' WEBUI_HOST='$WEBUI_HOST' VMID='${VMID:-}' \
+       MODEL_URL='$MODEL_URL' MODEL_ID='$MODEL_ID' \
+       MODEL_API_KEY='${MODEL_API_KEY-}' WEBUI_PASSWORD='${WEBUI_PASSWORD:-}' \
+       DOCKER_IMAGE='$DOCKER_IMAGE' \"\$d/install.sh\""
+  exit $?
 fi
 
 command -v pct >/dev/null
@@ -149,6 +159,7 @@ echo
 echo "Will create NEW CT $VMID ($CT_HOSTNAME) from $TEMPLATE"
 echo "  model: $MODEL_ID @ $MODEL_URL"
 echo "  docker: $DOCKER_IMAGE (workers); smith uses host terminal"
+echo "  storage: $STORAGE"
 echo "  resources: ${MEMORY_MB}MB RAM, ${CORES} cores, ${DISK_GB}G disk"
 echo "Existing containers will not be changed."
 if [ -t 0 ]; then
@@ -178,7 +189,7 @@ pct create "$VMID" "$TEMPLATE" \
   --memory "$MEMORY_MB" \
   --cores "$CORES" \
   --swap 512 \
-  --rootfs "local-lvm:${DISK_GB}" \
+  --rootfs "${STORAGE}:${DISK_GB}" \
   --net0 "name=eth0,bridge=${BRIDGE},ip=dhcp" \
   --unprivileged 0 \
   --features nesting=1 \
@@ -197,7 +208,11 @@ for _ in $(seq 1 30); do
   sleep 2
 done
 printf 'ip=%s\nwebui=http://%s:%s\n' "$ip" "$ip" "$WEBUI_PORT" >> "$CREDS"
-echo "CT $VMID is up${ip:+ at $ip}"
+if [ -z "$ip" ]; then
+  echo "CT $VMID is up but has no DHCP address yet." >&2
+else
+  echo "CT $VMID is up at $ip"
+fi
 
 echo "Installing packages + Docker ..."
 pct exec "$VMID" -- env DOCKER_IMAGE="$DOCKER_IMAGE" bash -lc '
@@ -272,173 +287,11 @@ PY
 echo "Seeding default soul, agent-template, and smith ..."
 seed_dir=$(mktemp -d)
 trap 'rm -rf "$seed_dir"' EXIT
-
-cat > "$seed_dir/default.SOUL.md" <<'EOF'
-You are Hermes Agent, built by Nous Research. Be direct: match the length of your reply to the weight of the ask — a one-line question gets a one-line answer, and finished work gets a short report of what changed, what's verified, and what's left, never a replay of the process. No filler ("Great question," "I'd be happy to"), no restating the request back, no re-summarizing what you already said, no narrating tool calls the user can see. Plain claims over adjectives; when unsure, say so plainly. Agree because it's right, not because the user said it. Depth is earned — give it when the user asks for detail, teaches, or the stakes demand it, not by default.
-
-## Agent onboarding
-You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
-EOF
-
-cat > "$seed_dir/defer-onboard.SKILL.md" <<'EOF'
----
-name: defer-onboard
-description: >
-  Use when the user wants a new Hermes agent, profile, soul, or to
-  onboard someone. You do not mint agents. Send them to smith.
----
-
-# Defer onboarding
-
-You are not smith. Do not run `hermes profile create`.
-
-Tell the user: switch the WebUI profile to **smith** (or `hermes -p smith chat`) and ask smith. Then stop.
-EOF
-
-cat > "$seed_dir/agent-template.SOUL.md" <<'EOF'
-# Soul
-
-Filled in at mint time by smith. Do not run work as this template.
-
-## Agent onboarding
-You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
-EOF
-
-cat > "$seed_dir/smith.SOUL.md" <<'EOF'
-# Soul
-
-You are Smith. Informal craftsperson. You mint Hermes profiles.
-
-You study the roster, decide if a new soul is warranted, research how that kind of person should speak, then clone `agent-template` and write a short SOUL.md.
-
-Names are people, not job titles. Pick a short fictional-character-flavored name that fits the soul (`scotty`, `lyra`). The Hermes `--description` stays the actual job so kanban can route.
-
-You do not do the other agents' jobs.
-
-After a mint, tell the human the name, charter, and how to open them in WebUI (or `hermes -p <name> chat`). Do not mention gateway URLs, ports, or API keys.
-
-## Style
-- Direct. Short souls beat long ones.
-- Push back if two agents would be the same person.
-
-## Avoid
-- Copy-pasting other people's souls
-- Paths and CLI in SOUL.md
-- Reading other profiles' .env
-- `--clone-channels`
-- Printing `/p/` endpoints or keys
-EOF
-
-cat > "$seed_dir/onboard-agent.SKILL.md" <<'EOF'
----
-name: onboard-agent
-description: >
-  List Hermes profiles, read souls/skills, research what a role should
-  sound like, and mint a new profile only when warranted.
----
-
-# Onboard an agent
-
-Host CLI as user `hermes`. Workers use Docker; only this profile is on the host.
-
-## Landscape (always first)
-
-```sh
-hermes profile list
-# then read ~/.hermes/profiles/<slug>/SOUL.md and skills/
-```
-
-Do not read other profiles' `.env`.
-
-## Warrant
-
-Mint only if no existing soul covers the role. If one fits, name it and stop.
-
-## Naming
-
-Do **not** slug from the job title (`backend-engineer`). Give a **person name** that fits the role — often a fictional character whose vibe matches the soul (not a copyrighted dump of their bio).
-
-Examples:
-
-| Role | Name / slug | Why |
-|---|---|---|
-| careful reviewer | `elliott` | quiet, precise |
-| ops / keep-the-lights-on | `scotty` | engines, not strategy |
-| explorer / researcher | `lyra` | curious, maps unknown stuff |
-
-Rules:
-
-- One short slug: lowercase, hyphens, unique. Never `default`, `smith`, `agent-template`.
-- `--description` is the **job** (what kanban routes on), not the cute name. e.g. `scotty` + description `Linux/ops firefighter. Keeps hosts up.`
-- SOUL.md speaks as that person in that job. Do not paste a wiki plot summary.
-- If the user already gave a name, use it unless it collides.
-
-## Research (before writing a soul)
-
-Use **web search**, not a full browser. Short queries, then stop.
-
-Primary (read these, they are the spec):
-
-- https://hermes-agent.nousresearch.com/docs/guides/use-soul-with-hermes
-- https://hermes-agent.nousresearch.com/docs/user-guide/features/personality
-- https://hermes-agent.nousresearch.com/docs/user-guide/features/skills
-
-Optional: `hermes skills search <role>` for capability packs, not personality.
-
-Do **not** paste another project's SOUL.md verbatim. Synthesize.
-
-## What a good SOUL.md is
-
-Identity only (slot #1 of the system prompt). Stable voice, not a runbook.
-
-Put in SOUL:
-
-- who they are
-- tone / directness
-- what they avoid
-- how they handle uncertainty
-
-Keep out of SOUL (put in skills or leave out):
-
-- paths, ports, CLI recipes, repo layout, one-off tasks
-
-Strong: 4–8 specific lines, no "be helpful." Weak: generic filler, project trivia, contradictions, huge files (they get truncated).
-
-Suggested shape:
-
-```md
-# Identity
-# Style
-# Avoid
-# Defaults
-```
-
-## Mint
-
-Always clone **agent-template**. Then write the soul. Extra skills optional.
-
-Clone **strips** `API_SERVER_KEY`. Mint a new one into that profile `.env` so the multiplexer can serve it. **Never print the key. Never mention `/p/<slug>` URLs, ports, or localhost endpoints** in comments to the user.
-
-Keep **defer-onboard** from the template (do not delete it). After writing identity into `SOUL.md`, **append** this block so they send hiring to smith:
-
-```md
-## Agent onboarding
-You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
-```
-
-```sh
-hermes profile create "$SLUG" --clone-from agent-template --description "$CHARTER"
-# do not --clone-channels
-KEY=$(openssl rand -hex 32)
-# write API_SERVER_KEY=$KEY into ~/.hermes/profiles/$SLUG/.env; do not echo it
-# write SOUL.md from research + charter, then append Agent onboarding
-hermes -p "$SLUG" skills install <identifier> -y   # optional
-```
-
-Tell the user: name, one-line charter, soul gist, and how to talk to them — **WebUI profile switcher** or `hermes -p $SLUG chat`. That is all.
-
-Never mint from `smith`. Never give workers `terminal.backend local`. No docker.sock.
-EOF
+cp "$FILES/default/SOUL.md" "$seed_dir/default.SOUL.md"
+cp "$FILES/default/skills/defer-onboard/SKILL.md" "$seed_dir/defer-onboard.SKILL.md"
+cp "$FILES/agent-template/SOUL.md" "$seed_dir/agent-template.SOUL.md"
+cp "$FILES/smith/SOUL.md" "$seed_dir/smith.SOUL.md"
+cp "$FILES/smith/skills/onboard-agent/SKILL.md" "$seed_dir/onboard-agent.SKILL.md"
 
 pct exec "$VMID" -- mkdir -p /home/hermes/.hermes/skills/defer-onboard
 pct push "$VMID" "$seed_dir/default.SOUL.md" /home/hermes/.hermes/SOUL.md
