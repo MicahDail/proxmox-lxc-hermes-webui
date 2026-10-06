@@ -24,7 +24,7 @@ Workers minted by smith inherit Docker. Smith is the only profile with host exec
 
 Default soul + skill `defer-onboard`: if asked to mint an agent, tell the user to switch to **smith**. Do not run `hermes profile create`.
 
-Smith skill `onboard-agent`: person names (not job slugs), `--description` is the job, always `--clone-from agent-template`, mint a new `API_SERVER_KEY` (clone strips it), never print keys or `/p/` URLs.
+Smith skill `onboard-agent`: person names (not job slugs), `--description` is the job, always `--clone-from agent-template`, mint a new `API_SERVER_KEY` (clone strips it), never print keys or `/p/` URLs. Minted workers keep `defer-onboard` plus an **Agent onboarding** soul block pointing at smith.
 
 ## Run (on the Proxmox host)
 

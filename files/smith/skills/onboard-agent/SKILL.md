@@ -87,12 +87,19 @@ Always clone **agent-template**. Then write the soul. Extra skills optional.
 
 Clone **strips** `API_SERVER_KEY`. Mint a new one into that profile `.env` so the multiplexer can serve it. **Never print the key. Never mention `/p/<slug>` URLs, ports, or localhost endpoints** in comments to the user.
 
+Keep **defer-onboard** from the template (do not delete it). After writing identity into `SOUL.md`, **append** this block so they send hiring to smith:
+
+```md
+## Agent onboarding
+You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
+```
+
 ```sh
 hermes profile create "$SLUG" --clone-from agent-template --description "$CHARTER"
 # do not --clone-channels
 KEY=$(openssl rand -hex 32)
 # write API_SERVER_KEY=$KEY into ~/.hermes/profiles/$SLUG/.env; do not echo it
-# write SOUL.md from research + charter
+# write SOUL.md from research + charter, then append Agent onboarding
 hermes -p "$SLUG" skills install <identifier> -y   # optional
 ```
 

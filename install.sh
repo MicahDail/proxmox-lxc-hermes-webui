@@ -299,6 +299,9 @@ cat > "$seed_dir/agent-template.SOUL.md" <<'EOF'
 # Soul
 
 Filled in at mint time by smith. Do not run work as this template.
+
+## Agent onboarding
+You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
 EOF
 
 cat > "$seed_dir/smith.SOUL.md" <<'EOF'
@@ -416,12 +419,19 @@ Always clone **agent-template**. Then write the soul. Extra skills optional.
 
 Clone **strips** `API_SERVER_KEY`. Mint a new one into that profile `.env` so the multiplexer can serve it. **Never print the key. Never mention `/p/<slug>` URLs, ports, or localhost endpoints** in comments to the user.
 
+Keep **defer-onboard** from the template (do not delete it). After writing identity into `SOUL.md`, **append** this block so they send hiring to smith:
+
+```md
+## Agent onboarding
+You do not mint Hermes profiles. If someone wants a new agent, a new soul, or onboarding, tell them to switch to **smith** in WebUI (or `hermes -p smith chat`) and stop. Do not run `hermes profile create`.
+```
+
 ```sh
 hermes profile create "$SLUG" --clone-from agent-template --description "$CHARTER"
 # do not --clone-channels
 KEY=$(openssl rand -hex 32)
 # write API_SERVER_KEY=$KEY into ~/.hermes/profiles/$SLUG/.env; do not echo it
-# write SOUL.md from research + charter
+# write SOUL.md from research + charter, then append Agent onboarding
 hermes -p "$SLUG" skills install <identifier> -y   # optional
 ```
 
@@ -433,10 +443,11 @@ EOF
 pct exec "$VMID" -- mkdir -p /home/hermes/.hermes/skills/defer-onboard
 pct push "$VMID" "$seed_dir/default.SOUL.md" /home/hermes/.hermes/SOUL.md
 pct push "$VMID" "$seed_dir/defer-onboard.SKILL.md" /home/hermes/.hermes/skills/defer-onboard/SKILL.md
+pct push "$VMID" "$seed_dir/defer-onboard.SKILL.md" /tmp/defer-onboard.SKILL.md
 pct push "$VMID" "$seed_dir/agent-template.SOUL.md" /tmp/agent-template.SOUL.md
 pct push "$VMID" "$seed_dir/smith.SOUL.md" /tmp/smith.SOUL.md
 pct push "$VMID" "$seed_dir/onboard-agent.SKILL.md" /tmp/onboard-agent.SKILL.md
-pct exec "$VMID" -- chown -R hermes:hermes /home/hermes/.hermes /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md
+pct exec "$VMID" -- chown -R hermes:hermes /home/hermes/.hermes /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md /tmp/defer-onboard.SKILL.md
 
 pct exec "$VMID" -- su - hermes -c "
 set -e
@@ -447,6 +458,8 @@ hermes -p agent-template config set model.provider custom
 hermes -p agent-template config set model.base_url '$MODEL_URL'
 hermes -p agent-template config set model.default '$MODEL_ID'
 install -m 644 /tmp/agent-template.SOUL.md \$HOME/.hermes/profiles/agent-template/SOUL.md
+mkdir -p \$HOME/.hermes/profiles/agent-template/skills/defer-onboard
+install -m 644 /tmp/defer-onboard.SKILL.md \$HOME/.hermes/profiles/agent-template/skills/defer-onboard/SKILL.md
 python3 - <<'PY'
 from pathlib import Path
 p = Path.home() / '.hermes' / 'profiles' / 'agent-template' / 'config.yaml'
@@ -495,7 +508,7 @@ for slug in ('agent-template', 'smith'):
     envp.write_text('\\n'.join(lines) + '\\n')
     envp.chmod(0o600)
 PY
-rm -f /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md
+rm -f /tmp/agent-template.SOUL.md /tmp/smith.SOUL.md /tmp/onboard-agent.SKILL.md /tmp/defer-onboard.SKILL.md
 "
 
 echo "Starting Hermes gateway ..."
