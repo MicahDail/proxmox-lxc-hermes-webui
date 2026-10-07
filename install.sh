@@ -11,11 +11,27 @@ DISK_GB="${DISK_GB:-32}"
 STORAGE="${STORAGE:-local-lvm}"
 BRIDGE="${BRIDGE:-vmbr0}"
 TEMPLATE="${TEMPLATE:-}"
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-FILES="$SCRIPT_DIR/files"
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+else
+  SCRIPT_DIR=""
+fi
+FILES="${SCRIPT_DIR:+$SCRIPT_DIR/files}"
+FILES_BASE_URL="${FILES_BASE_URL:-https://raw.githubusercontent.com/MicahDail/proxmox-lxc-hermes-webui/master/files}"
 WEBUI_PORT="${WEBUI_PORT:-8787}"
 WEBUI_HOST="${WEBUI_HOST:-0.0.0.0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nousresearch/hermes-sandbox:desktop}"
+
+fetch_seed() {
+  local rel=$1 dest=$2
+  mkdir -p "$(dirname "$dest")"
+  if [ -n "$FILES" ] && [ -f "$FILES/$rel" ]; then
+    cp "$FILES/$rel" "$dest"
+  else
+    echo "Fetching files/$rel ..."
+    curl -fsSL "$FILES_BASE_URL/$rel" -o "$dest"
+  fi
+}
 
 prompt() {
   local var=$1 msg=$2 def=${3-}
@@ -108,9 +124,11 @@ if [ -z "$MODEL_ID" ]; then
   exit 1
 fi
 
-if [ ! -f "$FILES/smith/skills/onboard-agent/SKILL.md" ]; then
-  echo "Run from a git checkout so files/ sits next to install.sh." >&2
-  exit 1
+if [ -z "${WEBUI_PASSWORD+x}" ]; then
+  prompt WEBUI_PASSWORD "WebUI password (blank to generate)" ""
+fi
+if [ -z "${WEBUI_PASSWORD:-}" ]; then
+  WEBUI_PASSWORD="$(openssl rand -base64 18)"
 fi
 
 if ! command -v pct >/dev/null 2>&1; then
@@ -122,14 +140,25 @@ if ! command -v pct >/dev/null 2>&1; then
     echo "Set PROXMOX_HOST or run this script on the Proxmox host." >&2
     exit 1
   fi
-  tar czf - -C "$SCRIPT_DIR" install.sh files | ssh -o BatchMode=yes "$PROXMOX_HOST" \
-    "d=\$(mktemp -d) && tar xzf - -C \"\$d\" && chmod +x \"\$d/install.sh\" && \
-     env CT_HOSTNAME='$CT_HOSTNAME' MEMORY_MB='$MEMORY_MB' CORES='$CORES' DISK_GB='$DISK_GB' \
-       STORAGE='$STORAGE' BRIDGE='$BRIDGE' TEMPLATE='${TEMPLATE:-}' \
-       WEBUI_PORT='$WEBUI_PORT' WEBUI_HOST='$WEBUI_HOST' VMID='${VMID:-}' \
-       MODEL_URL='$MODEL_URL' MODEL_ID='$MODEL_ID' \
-       MODEL_API_KEY='${MODEL_API_KEY-}' WEBUI_PASSWORD='${WEBUI_PASSWORD:-}' \
-       DOCKER_IMAGE='$DOCKER_IMAGE' \"\$d/install.sh\""
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/install.sh" ] && [ -f "$FILES/smith/SOUL.md" ]; then
+    tar czf - -C "$SCRIPT_DIR" install.sh files | ssh -o BatchMode=yes "$PROXMOX_HOST" \
+      "d=\$(mktemp -d) && tar xzf - -C \"\$d\" && chmod +x \"\$d/install.sh\" && \
+       env CT_HOSTNAME='$CT_HOSTNAME' MEMORY_MB='$MEMORY_MB' CORES='$CORES' DISK_GB='$DISK_GB' \
+         STORAGE='$STORAGE' BRIDGE='$BRIDGE' TEMPLATE='${TEMPLATE:-}' \
+         WEBUI_PORT='$WEBUI_PORT' WEBUI_HOST='$WEBUI_HOST' VMID='${VMID:-}' \
+         MODEL_URL='$MODEL_URL' MODEL_ID='$MODEL_ID' \
+         MODEL_API_KEY='${MODEL_API_KEY-}' WEBUI_PASSWORD='$WEBUI_PASSWORD' \
+         DOCKER_IMAGE='$DOCKER_IMAGE' FILES_BASE_URL='$FILES_BASE_URL' \"\$d/install.sh\""
+  else
+    ssh -o BatchMode=yes "$PROXMOX_HOST" \
+      env CT_HOSTNAME="$CT_HOSTNAME" MEMORY_MB="$MEMORY_MB" CORES="$CORES" DISK_GB="$DISK_GB" \
+        STORAGE="$STORAGE" BRIDGE="$BRIDGE" TEMPLATE="${TEMPLATE:-}" \
+        WEBUI_PORT="$WEBUI_PORT" WEBUI_HOST="$WEBUI_HOST" VMID="${VMID:-}" \
+        MODEL_URL="$MODEL_URL" MODEL_ID="$MODEL_ID" \
+        MODEL_API_KEY="${MODEL_API_KEY-}" WEBUI_PASSWORD="$WEBUI_PASSWORD" \
+        DOCKER_IMAGE="$DOCKER_IMAGE" FILES_BASE_URL="$FILES_BASE_URL" \
+        bash -s < "${BASH_SOURCE[0]}"
+  fi
   exit $?
 fi
 
@@ -287,11 +316,11 @@ PY
 echo "Seeding default soul, agent-template, and smith ..."
 seed_dir=$(mktemp -d)
 trap 'rm -rf "$seed_dir"' EXIT
-cp "$FILES/default/SOUL.md" "$seed_dir/default.SOUL.md"
-cp "$FILES/default/skills/defer-onboard/SKILL.md" "$seed_dir/defer-onboard.SKILL.md"
-cp "$FILES/agent-template/SOUL.md" "$seed_dir/agent-template.SOUL.md"
-cp "$FILES/smith/SOUL.md" "$seed_dir/smith.SOUL.md"
-cp "$FILES/smith/skills/onboard-agent/SKILL.md" "$seed_dir/onboard-agent.SKILL.md"
+fetch_seed default/SOUL.md "$seed_dir/default.SOUL.md"
+fetch_seed default/skills/defer-onboard/SKILL.md "$seed_dir/defer-onboard.SKILL.md"
+fetch_seed agent-template/SOUL.md "$seed_dir/agent-template.SOUL.md"
+fetch_seed smith/SOUL.md "$seed_dir/smith.SOUL.md"
+fetch_seed smith/skills/onboard-agent/SKILL.md "$seed_dir/onboard-agent.SKILL.md"
 
 pct exec "$VMID" -- mkdir -p /home/hermes/.hermes/skills/defer-onboard
 pct push "$VMID" "$seed_dir/default.SOUL.md" /home/hermes/.hermes/SOUL.md
@@ -336,6 +365,24 @@ for t in browser vision web_search image_gen speech tts web_extract code_executi
   hermes -p smith config set tools.\$t.enabled false 2>/dev/null || true
 done
 hermes -p smith config set tools.web.enabled true 2>/dev/null || true
+python3 - <<'PY'
+from pathlib import Path
+p = Path.home() / '.hermes' / 'profiles' / 'smith' / 'config.yaml'
+t = p.read_text() if p.exists() else ''
+if 'platform_toolsets:' not in t:
+    t = t.rstrip() + '''
+platform_toolsets:
+  cli:
+    - clarify
+    - file
+    - memory
+    - skills
+    - terminal
+    - todo
+    - web
+'''
+p.write_text(t if t.endswith('\n') else t + '\n')
+PY
 install -m 644 /tmp/smith.SOUL.md \$HOME/.hermes/profiles/smith/SOUL.md
 mkdir -p \$HOME/.hermes/profiles/smith/skills/onboard-agent
 install -m 644 /tmp/onboard-agent.SKILL.md \$HOME/.hermes/profiles/smith/skills/onboard-agent/SKILL.md
@@ -397,12 +444,13 @@ pct exec "$VMID" -- bash -lc "
 cat > /etc/systemd/system/hermes-webui.service <<'EOF'
 [Unit]
 Description=Hermes WebUI
-After=network-online.target
-Wants=network-online.target
+After=network-online.target docker.service
+Wants=network-online.target docker.service
 
 [Service]
 User=hermes
 Group=hermes
+SupplementaryGroups=docker
 WorkingDirectory=/home/hermes/hermes-webui
 Environment=HOME=/home/hermes
 Environment=PATH=/home/hermes/.local/bin:/usr/bin:/bin
@@ -434,8 +482,10 @@ fi
 
 echo
 echo "Done. Existing CTs were not modified."
-echo "  WebUI:  http://${ip}:${WEBUI_PORT}"
-echo "  Creds:  $CREDS (root + webui passwords; not printed here)"
-echo "  Model:  $MODEL_ID @ $MODEL_URL"
-echo "  Profiles: default + agent-template (docker, parked) + smith (host terminal)"
-echo "  Inside: pct enter $VMID"
+echo "  WebUI:     http://${ip}:${WEBUI_PORT}"
+echo "  Password:  $WEBUI_PASSWORD"
+echo "  Creds:     $CREDS (also has root password)"
+echo "  Model:     $MODEL_ID @ $MODEL_URL"
+echo "  Profiles:  default + agent-template (docker, parked) + smith (host; mints agents)"
+echo "  Next:      open WebUI, switch to smith to mint people"
+echo "  Inside:    pct enter $VMID"

@@ -36,6 +36,7 @@ Need (skip any the user already answered):
 - Avoid: hype, sycophancy, overexplaining, swearing, anything else they name
 - Name: theirs, or you pick
 - Model: shop default unless they name another id on the same endpoint
+- GitHub: none, or this person is the **triage clerk** (only one profile polls GitHub; PAT comments as the human)
 - Skills now vs later (see below)
 
 If two answers would mint different people, ask. Then proceed.
@@ -82,6 +83,21 @@ The profile exists on disk after `hermes profile create`. Seed skills **in that 
 - **Later:** the new agent and the user refine and add skills. Do not block the mint waiting for that.
 
 If they are unsure which packs: search, propose 0–3, install only what they confirm. Procedures belong in skills, not SOUL.
+
+## GitHub (optional)
+
+Hermes kanban is source of truth. GitHub is the mailbox. Comments via PAT look like the human.
+
+**At most one triage clerk** (e.g. `radar`) should `gh issue list` / `gh pr list`. Other workers do not poll GitHub.
+
+If this mint **is** that clerk:
+
+- Enable `kanban` + `terminal` (for `gh`) on the profile; docker terminal, not host
+- Seed a skill: poll GH → `kanban_create` assigned to a **profile name** lane → `kanban_attach_url`; on done/blocked, comment (close only if the human asked)
+- Put `GH_TOKEN` in that profile `.env` only if the human provided one; never print it
+- Do not give `GH_TOKEN` to implementer profiles
+
+If this mint is an implementer: no GitHub poll skill. They take kanban cards for their lane.
 
 ## What a good SOUL.md is
 
