@@ -19,7 +19,7 @@ fi
 FILES="${SCRIPT_DIR:+$SCRIPT_DIR/files}"
 FILES_BASE_URL="${FILES_BASE_URL:-https://raw.githubusercontent.com/MicahDail/proxmox-lxc-hermes-webui/master/files}"
 WEBUI_PORT="${WEBUI_PORT:-8787}"
-WEBUI_HOST="${WEBUI_HOST:-127.0.0.1}"
+WEBUI_HOST="${WEBUI_HOST:-0.0.0.0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nousresearch/hermes-sandbox:desktop}"
 
 fetch_seed() {
@@ -194,7 +194,7 @@ echo
 echo "Will create NEW CT $VMID ($CT_HOSTNAME) from $TEMPLATE"
 echo "  model: $MODEL_ID @ $MODEL_URL"
 echo "  docker: $DOCKER_IMAGE (workers); smith uses host terminal"
-echo "  tailscale: WebUI + gateway API on tailnet only"
+echo "  bind: 0.0.0.0 (LAN) + Tailscale serve"
 echo "  storage: $STORAGE"
 echo "  resources: ${MEMORY_MB}MB RAM, ${CORES} cores, ${DISK_GB}G disk"
 echo "Existing containers will not be changed."
@@ -335,7 +335,7 @@ skip = (
 lines = [ln for ln in (p.read_text().splitlines() if p.exists() else []) if ln.strip() and not ln.startswith(skip)]
 lines += [
     'API_SERVER_ENABLED=true',
-    'API_SERVER_HOST=127.0.0.1',
+    'API_SERVER_HOST=0.0.0.0',
     'API_SERVER_KEY=' + secrets.token_hex(32),
     'OPENAI_BASE_URL=$MODEL_URL',
 ]
@@ -436,7 +436,7 @@ for slug in ('agent-template', 'smith'):
     lines = [ln for ln in (envp.read_text().splitlines() if envp.exists() else []) if ln.strip() and not ln.startswith(('API_SERVER_KEY=', 'OPENAI_BASE_URL=', 'OPENAI_API_KEY=', 'API_SERVER_ENABLED=', 'API_SERVER_HOST='))]
     lines += [
         'API_SERVER_ENABLED=true',
-        'API_SERVER_HOST=127.0.0.1',
+        'API_SERVER_HOST=0.0.0.0',
         'API_SERVER_KEY=' + secrets.token_hex(32),
     ]
     if openai_url:
@@ -493,7 +493,7 @@ WorkingDirectory=/home/hermes/hermes-webui
 Environment=HOME=/home/hermes
 Environment=PATH=/home/hermes/.local/bin:/usr/bin:/bin
 EnvironmentFile=/home/hermes/hermes-webui/.env
-ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/bootstrap.py --host 127.0.0.1 --foreground --skip-agent-install $WEBUI_PORT
+ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/bootstrap.py --host 0.0.0.0 --foreground --skip-agent-install $WEBUI_PORT
 Restart=always
 RestartSec=5
 
@@ -526,9 +526,11 @@ printf 'webui=http://%s:%s\ngateway=http://%s:%s/v1\n' "$ts_ip" "$WEBUI_PORT" "$
 
 echo
 echo "Done. Existing CTs were not modified."
-echo "  WebUI:     http://${ts_ip}:${WEBUI_PORT}  (tailnet only)"
+echo "  WebUI:     http://${ip}:${WEBUI_PORT}  (LAN)"
+echo "             http://${ts_ip}:${WEBUI_PORT}  (Tailscale)"
 echo "  Password:  $WEBUI_PASSWORD"
-echo "  Gateway:   http://${ts_ip}:${gw_port}/v1  (tailnet only)"
+echo "  Gateway:   http://${ip}:${gw_port}/v1  (LAN, API key)"
+echo "             http://${ts_ip}:${gw_port}/v1  (Tailscale)"
 echo "  Creds:     $CREDS (also has root password)"
 echo "  Model:     $MODEL_ID @ $MODEL_URL"
 echo "  Profiles:  default + agent-template (docker, parked) + smith (host; mints agents)"

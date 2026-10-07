@@ -20,7 +20,7 @@ You will be asked for:
 - WebUI password (blank generates one)
 - Tailscale auth key (blank prints a login URL)
 
-Confirm before `pct create`. At the end the script prints the **Tailscale** WebUI URL and password. WebUI and the Hermes gateway API listen on localhost and are published on the tailnet only (`tailscale serve`).
+Confirm before `pct create`. At the end the script prints LAN and Tailscale URLs plus the WebUI password. WebUI (password) and the gateway API (key) bind `0.0.0.0` and are also published with `tailscale serve`.
 
 Soul/skill files are copied from a local `files/` directory if you cloned the repo; otherwise they are fetched from this GitHub repo.
 
@@ -83,7 +83,7 @@ Non-tty skips the “Continue?” prompt.
 
 Passwords are also written to `/root/<hostname>-<vmid>.creds` on the Proxmox host (mode 600). The WebUI password is printed when install finishes.
 
-WebUI and the gateway bind `127.0.0.1` inside the CT. Reach them at `http://<tailscale-ip>:8787` (and `:8642/v1` for the API) from the tailnet.
+WebUI and the gateway bind `0.0.0.0` (password / API key). Same ports on the LAN DHCP address and on Tailscale.
 
 ## After install
 
