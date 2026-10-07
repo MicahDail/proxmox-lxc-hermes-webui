@@ -257,12 +257,41 @@ else
   echo "CT $VMID is up at $ip"
 fi
 
+echo "Waiting for DNS ..."
+ok_dns=0
+for _ in $(seq 1 30); do
+  if pct exec "$VMID" -- python3 -c 'import socket; socket.getaddrinfo("deb.debian.org", 80, socket.AF_INET)' >/dev/null 2>&1; then
+    ok_dns=1
+    break
+  fi
+  sleep 2
+done
+if [ "$ok_dns" != 1 ]; then
+  echo "No IPv4 DNS yet; pinning 1.1.1.1 in the CT." >&2
+  pct exec "$VMID" -- bash -lc 'printf "nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:3\n" > /etc/resolv.conf'
+fi
+
 echo "Installing packages + Docker ..."
 pct exec "$VMID" -- env DOCKER_IMAGE="$DOCKER_IMAGE" bash -lc '
 set -e
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -qq
-apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip python3-dev build-essential sudo openssl docker.io
+printf "Acquire::ForceIPv4 \"true\";\n" > /etc/apt/apt.conf.d/99force-ipv4
+if [ -f /etc/gai.conf ] && ! grep -q "^precedence ::ffff:0:0/96  100" /etc/gai.conf; then
+  printf "\nprecedence ::ffff:0:0/96  100\n" >> /etc/gai.conf
+fi
+ok=0
+for i in 1 2 3 4 5 6; do
+  if apt-get update -qq && apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip python3-dev build-essential sudo openssl docker.io; then
+    ok=1
+    break
+  fi
+  echo "apt retry $i ..." >&2
+  sleep 4
+done
+if [ "$ok" != 1 ]; then
+  echo "apt-get failed after retries." >&2
+  exit 1
+fi
 id hermes >/dev/null 2>&1 || useradd -m -s /bin/bash hermes
 usermod -aG docker hermes
 systemctl enable --now docker
