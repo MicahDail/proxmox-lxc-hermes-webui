@@ -257,6 +257,8 @@ else
   echo "CT $VMID is up at $ip"
 fi
 
+pct exec "$VMID" -- chmod 755 /etc /usr /var /home 2>/dev/null || true
+
 echo "Waiting for DNS ..."
 ok_dns=0
 for _ in $(seq 1 30); do
@@ -281,7 +283,7 @@ if [ -f /etc/gai.conf ] && ! grep -q "^precedence ::ffff:0:0/96  100" /etc/gai.c
 fi
 ok=0
 for i in 1 2 3 4 5 6; do
-  if apt-get update -qq && apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-pip python3-dev build-essential sudo openssl docker.io; then
+  if apt-get update -qq && apt-get install -y -qq git curl ca-certificates locales python3 python3-venv python3-pip python3-dev build-essential sudo openssl docker.io; then
     ok=1
     break
   fi
@@ -292,7 +294,13 @@ if [ "$ok" != 1 ]; then
   echo "apt-get failed after retries." >&2
   exit 1
 fi
+chmod 755 /etc
+sed -i 's/^# *en_US.UTF-8 UTF-8/en_US.UTF-8 UTF-8/' /etc/locale.gen || true
+locale-gen en_US.UTF-8 >/dev/null 2>&1 || true
+update-locale LANG=en_US.UTF-8 >/dev/null 2>&1 || true
 id hermes >/dev/null 2>&1 || useradd -m -s /bin/bash hermes
+chmod 755 /home /etc
+chmod 700 /home/hermes
 usermod -aG docker hermes
 systemctl enable --now docker
 docker pull "$DOCKER_IMAGE"
