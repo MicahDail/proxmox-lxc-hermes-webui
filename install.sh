@@ -275,7 +275,7 @@ echo "Installing packages + Docker ..."
 pct exec "$VMID" -- env DOCKER_IMAGE="$DOCKER_IMAGE" bash -lc '
 set -e
 export DEBIAN_FRONTEND=noninteractive
-printf "Acquire::ForceIPv4 \"true\";\n" > /etc/apt/apt.conf.d/99force-ipv4
+printf "Acquire::ForceIPv4 \"true\";\nAPT::Sandbox::User \"root\";\n" > /etc/apt/apt.conf.d/99force-ipv4
 if [ -f /etc/gai.conf ] && ! grep -q "^precedence ::ffff:0:0/96  100" /etc/gai.conf; then
   printf "\nprecedence ::ffff:0:0/96  100\n" >> /etc/gai.conf
 fi
