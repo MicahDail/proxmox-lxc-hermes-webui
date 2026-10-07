@@ -19,7 +19,7 @@ fi
 FILES="${SCRIPT_DIR:+$SCRIPT_DIR/files}"
 FILES_BASE_URL="${FILES_BASE_URL:-https://raw.githubusercontent.com/MicahDail/proxmox-lxc-hermes-webui/master/files}"
 WEBUI_PORT="${WEBUI_PORT:-8787}"
-WEBUI_HOST="${WEBUI_HOST:-0.0.0.0}"
+WEBUI_HOST="${WEBUI_HOST:-127.0.0.1}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-nousresearch/hermes-sandbox:desktop}"
 
 fetch_seed() {
@@ -131,6 +131,10 @@ if [ -z "${WEBUI_PASSWORD:-}" ]; then
   WEBUI_PASSWORD="$(openssl rand -base64 18)"
 fi
 
+if [ -z "${TS_AUTHKEY+x}" ]; then
+  prompt_secret TS_AUTHKEY "Tailscale auth key"
+fi
+
 if ! command -v pct >/dev/null 2>&1; then
   if [ -z "$PROXMOX_HOST" ] && [ -t 0 ]; then
     echo -n "Proxmox SSH target (user@host): "
@@ -148,6 +152,7 @@ if ! command -v pct >/dev/null 2>&1; then
          WEBUI_PORT='$WEBUI_PORT' WEBUI_HOST='$WEBUI_HOST' VMID='${VMID:-}' \
          MODEL_URL='$MODEL_URL' MODEL_ID='$MODEL_ID' \
          MODEL_API_KEY='${MODEL_API_KEY-}' WEBUI_PASSWORD='$WEBUI_PASSWORD' \
+         TS_AUTHKEY='${TS_AUTHKEY-}' \
          DOCKER_IMAGE='$DOCKER_IMAGE' FILES_BASE_URL='$FILES_BASE_URL' \"\$d/install.sh\""
   else
     ssh -o BatchMode=yes "$PROXMOX_HOST" \
@@ -156,6 +161,7 @@ if ! command -v pct >/dev/null 2>&1; then
         WEBUI_PORT="$WEBUI_PORT" WEBUI_HOST="$WEBUI_HOST" VMID="${VMID:-}" \
         MODEL_URL="$MODEL_URL" MODEL_ID="$MODEL_ID" \
         MODEL_API_KEY="${MODEL_API_KEY-}" WEBUI_PASSWORD="$WEBUI_PASSWORD" \
+        TS_AUTHKEY="${TS_AUTHKEY-}" \
         DOCKER_IMAGE="$DOCKER_IMAGE" FILES_BASE_URL="$FILES_BASE_URL" \
         bash -s < "${BASH_SOURCE[0]}"
   fi
@@ -188,6 +194,7 @@ echo
 echo "Will create NEW CT $VMID ($CT_HOSTNAME) from $TEMPLATE"
 echo "  model: $MODEL_ID @ $MODEL_URL"
 echo "  docker: $DOCKER_IMAGE (workers); smith uses host terminal"
+echo "  tailscale: WebUI + gateway API on tailnet only"
 echo "  storage: $STORAGE"
 echo "  resources: ${MEMORY_MB}MB RAM, ${CORES} cores, ${DISK_GB}G disk"
 echo "Existing containers will not be changed."
@@ -226,7 +233,14 @@ pct create "$VMID" "$TEMPLATE" \
   --ostype debian \
   --arch amd64 \
   --password "$ROOT_PASSWORD" \
-  --start 1
+  --start 0
+
+echo "Enabling /dev/net/tun for Tailscale ..."
+cat >> "/etc/pve/lxc/${VMID}.conf" <<'EOF'
+lxc.cgroup2.devices.allow: c 10:200 rwm
+lxc.mount.entry: /dev/net/tun dev/net/tun none bind,create=file
+EOF
+pct start "$VMID"
 
 ip=""
 for _ in $(seq 1 30); do
@@ -253,7 +267,31 @@ id hermes >/dev/null 2>&1 || useradd -m -s /bin/bash hermes
 usermod -aG docker hermes
 systemctl enable --now docker
 docker pull "$DOCKER_IMAGE"
+curl -fsSL https://tailscale.com/install.sh | sh
+systemctl enable --now tailscaled
 '
+
+echo "Bringing Tailscale up ..."
+if [ -n "${TS_AUTHKEY:-}" ]; then
+  pct exec "$VMID" -- tailscale up --auth-key="$TS_AUTHKEY" --hostname="$CT_HOSTNAME" --accept-dns=false
+else
+  echo "Open the Tailscale login URL printed below, then wait."
+  pct exec "$VMID" -- tailscale up --hostname="$CT_HOSTNAME" --accept-dns=false || true
+fi
+ts_ip=""
+for _ in $(seq 1 60); do
+  ts_ip=$(pct exec "$VMID" -- tailscale ip -4 2>/dev/null | head -1 || true)
+  if [ -n "$ts_ip" ]; then
+    break
+  fi
+  sleep 2
+done
+if [ -z "$ts_ip" ]; then
+  echo "Tailscale has no IPv4 yet. Finish login: pct exec $VMID -- tailscale up" >&2
+  exit 1
+fi
+printf 'tailscale_ip=%s\n' "$ts_ip" >> "$CREDS"
+echo "Tailscale IPv4 $ts_ip"
 
 echo "Installing Hermes Agent (this can take several minutes) ..."
 pct exec "$VMID" -- su - hermes -c '
@@ -444,8 +482,8 @@ pct exec "$VMID" -- bash -lc "
 cat > /etc/systemd/system/hermes-webui.service <<'EOF'
 [Unit]
 Description=Hermes WebUI
-After=network-online.target docker.service
-Wants=network-online.target docker.service
+After=network-online.target docker.service tailscaled.service
+Wants=network-online.target docker.service tailscaled.service
 
 [Service]
 User=hermes
@@ -455,7 +493,7 @@ WorkingDirectory=/home/hermes/hermes-webui
 Environment=HOME=/home/hermes
 Environment=PATH=/home/hermes/.local/bin:/usr/bin:/bin
 EnvironmentFile=/home/hermes/hermes-webui/.env
-ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/bootstrap.py --host 0.0.0.0 --foreground --skip-agent-install $WEBUI_PORT
+ExecStart=/usr/bin/python3 /home/hermes/hermes-webui/bootstrap.py --host 127.0.0.1 --foreground --skip-agent-install $WEBUI_PORT
 Restart=always
 RestartSec=5
 
@@ -480,12 +518,19 @@ if [ "$ok" != 1 ]; then
   exit 1
 fi
 
+echo "Publishing WebUI and gateway on Tailscale ..."
+gw_port="${API_SERVER_PORT:-8642}"
+pct exec "$VMID" -- tailscale serve --bg --tcp "$WEBUI_PORT" "tcp://127.0.0.1:${WEBUI_PORT}"
+pct exec "$VMID" -- tailscale serve --bg --tcp "$gw_port" "tcp://127.0.0.1:${gw_port}" || true
+printf 'webui=http://%s:%s\ngateway=http://%s:%s/v1\n' "$ts_ip" "$WEBUI_PORT" "$ts_ip" "$gw_port" >> "$CREDS"
+
 echo
 echo "Done. Existing CTs were not modified."
-echo "  WebUI:     http://${ip}:${WEBUI_PORT}"
+echo "  WebUI:     http://${ts_ip}:${WEBUI_PORT}  (tailnet only)"
 echo "  Password:  $WEBUI_PASSWORD"
+echo "  Gateway:   http://${ts_ip}:${gw_port}/v1  (tailnet only)"
 echo "  Creds:     $CREDS (also has root password)"
 echo "  Model:     $MODEL_ID @ $MODEL_URL"
 echo "  Profiles:  default + agent-template (docker, parked) + smith (host; mints agents)"
-echo "  Next:      open WebUI, switch to smith to mint people"
+echo "  Next:      open WebUI on Tailscale, switch to smith to mint people"
 echo "  Inside:    pct enter $VMID"

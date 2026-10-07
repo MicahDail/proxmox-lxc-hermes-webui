@@ -18,8 +18,9 @@ You will be asked for:
 - Optional endpoint API key
 - Model id (listed from `GET /v1/models` when possible)
 - WebUI password (blank generates one)
+- Tailscale auth key (blank prints a login URL)
 
-Confirm before `pct create`. At the end the script prints the WebUI URL and password.
+Confirm before `pct create`. At the end the script prints the **Tailscale** WebUI URL and password. WebUI and the Hermes gateway API listen on localhost and are published on the tailnet only (`tailscale serve`).
 
 Soul/skill files are copied from a local `files/` directory if you cloned the repo; otherwise they are fetched from this GitHub repo.
 
@@ -29,6 +30,7 @@ Soul/skill files are copied from a local `files/` directory if you cloned the re
 - User `hermes` in group `docker`; Docker daemon + sandbox image pulled
 - Hermes Agent + messaging **gateway** (systemd user service + linger)
 - Custom model: `model.provider=custom`, your base URL and model id
+- Tailscale (`/dev/net/tun` in the CT); WebUI + gateway API via `tailscale serve` (not on the LAN DHCP address)
 - Hermes WebUI on port **8787**, password-protected, systemd `hermes-webui.service` with `SupplementaryGroups=docker`
 
 ### Profiles
@@ -69,18 +71,19 @@ export MODEL_URL=http://127.0.0.1:8000/v1
 export MODEL_ID=your-model-id
 export MODEL_API_KEY=          # optional; set empty if unused
 export WEBUI_PASSWORD=choose-me
+export TS_AUTHKEY=tskey-auth-...   # optional; blank = login URL
 export VMID=                   # optional; default is cluster nextid
 export CT_HOSTNAME=hermes-webui
 ./install.sh
 ```
 
-Other knobs: `MEMORY_MB`, `CORES`, `DISK_GB` (default 32), `STORAGE` (default `local-lvm`), `BRIDGE`, `TEMPLATE`, `WEBUI_PORT`, `WEBUI_HOST`, `ROOT_PASSWORD`, `DOCKER_IMAGE` (default `nousresearch/hermes-sandbox:desktop`), `FILES_BASE_URL`.
+Other knobs: `MEMORY_MB`, `CORES`, `DISK_GB` (default 32), `STORAGE` (default `local-lvm`), `BRIDGE`, `TEMPLATE`, `WEBUI_PORT`, `WEBUI_HOST`, `ROOT_PASSWORD`, `DOCKER_IMAGE` (default `nousresearch/hermes-sandbox:desktop`), `FILES_BASE_URL`, `API_SERVER_PORT` (default 8642).
 
 Non-tty skips the “Continue?” prompt.
 
 Passwords are also written to `/root/<hostname>-<vmid>.creds` on the Proxmox host (mode 600). The WebUI password is printed when install finishes.
 
-WebUI listens on `0.0.0.0` by default (password only). Put it behind a trusted LAN or change `WEBUI_HOST`.
+WebUI and the gateway bind `127.0.0.1` inside the CT. Reach them at `http://<tailscale-ip>:8787` (and `:8642/v1` for the API) from the tailnet.
 
 ## After install
 
